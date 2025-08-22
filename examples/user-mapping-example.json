@@ -1,0 +1,61 @@
+{
+  "_metadata": {
+    "project": "PROJ",
+    "generated": "2024-01-15T10:30:00",
+    "jira_server": "https://company.atlassian.net",
+    "total_users": 12,
+    "sources_used": ["assignable", "issue_history", "role_member"],
+    "instructions": [
+      "Fill in the 'github_username' field for each user you want to map",
+      "Users are sorted by activity level (most active first)",
+      "You can delete entries for users you don't want to migrate",
+      "Leave 'github_username' as null for users you want to skip"
+    ]
+  },
+  "user_mapping": {
+    "john.doe@company.com": {
+      "display_name": "John Doe",
+      "jira_account_id": "abc123def456",
+      "email_address": "john.doe@company.com",
+      "roles": ["Developers", "Users"],
+      "sources": ["assignable", "issue_history"],
+      "active": true,
+      "issue_activity_count": 89,
+      "github_username": "johndoe",
+      "notes": "Lead developer"
+    },
+    "jane.smith@company.com": {
+      "display_name": "Jane Smith", 
+      "jira_account_id": "def456ghi789",
+      "email_address": "jane.smith@company.com",
+      "roles": ["Administrators", "Developers"],
+      "sources": ["role_member", "assignable", "issue_history"],
+      "active": true,
+      "issue_activity_count": 67,
+      "github_username": "janesmith-dev",
+      "notes": "Project manager and dev"
+    },
+    "bob.wilson@company.com": {
+      "display_name": "Bob Wilson",
+      "jira_account_id": "ghi789jkl012", 
+      "email_address": "bob.wilson@company.com",
+      "roles": ["Users"],
+      "sources": ["issue_history"],
+      "active": true,
+      "issue_activity_count": 23,
+      "github_username": "bobwilson",
+      "notes": "QA tester"
+    },
+    "alice.johnson@company.com": {
+      "display_name": "Alice Johnson",
+      "jira_account_id": "jkl012mno345",
+      "email_address": "alice.johnson@company.com", 
+      "roles": ["Users"],
+      "sources": ["issue_history"],
+      "active": false,
+      "issue_activity_count": 12,
+      "github_username": null,
+      "notes": "Former employee - skip mapping"
+    }
+  }
+}

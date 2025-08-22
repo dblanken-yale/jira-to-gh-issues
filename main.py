@@ -43,15 +43,27 @@ def extract_issue_key_from_url_or_key(input_string: str) -> str:
 @click.option('--dry-run', is_flag=True, help='Preview changes without creating issues')
 @click.option('--no-comments', is_flag=True, help='Skip migrating comments')
 @click.option('--no-attachments', is_flag=True, help='Skip migrating attachments and images')
+@click.option('--user-mapping-file', help='Path to user mapping JSON file for enhanced migration')
+@click.option('--auto-create-labels', is_flag=True, help='Automatically create missing labels for types, priorities, etc.')
+@click.option('--migrate-closed-as-closed', is_flag=True, help='Migrate resolved Jira issues as closed GitHub issues')
 @click.pass_context
-def cli(ctx, dry_run: bool, no_comments: bool, no_attachments: bool):
+def cli(ctx, dry_run: bool, no_comments: bool, no_attachments: bool, 
+        user_mapping_file: str, auto_create_labels: bool, migrate_closed_as_closed: bool):
     """Jira to GitHub Issues Migration Tool"""
     try:
         config = Config.from_env()
         config.dry_run = dry_run
         config.include_comments = not no_comments
         config.include_attachments = not no_attachments
-        ctx.obj = config
+        
+        # Store enhancement options in context for commands
+        ctx.obj = {
+            'config': config,
+            'user_mapping_file': user_mapping_file,
+            'auto_create_labels': auto_create_labels,
+            'migrate_closed_as_closed': migrate_closed_as_closed,
+            'use_enhanced': bool(user_mapping_file or auto_create_labels or migrate_closed_as_closed)
+        }
     except ValueError as e:
         rprint(f"[bold red]Configuration Error:[/bold red] {e}")
         rprint("\n[yellow]Please create a .env file with the required environment variables.[/yellow]")
@@ -64,14 +76,26 @@ def cli(ctx, dry_run: bool, no_comments: bool, no_attachments: bool):
 @click.pass_context
 def migrate(ctx, issue_keys: List[str]):
     """Migrate specific Jira issues by their keys or URLs (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"""
-    config = ctx.obj
-    service = MigrationService(config)
+    ctx_data = ctx.obj
+    config = ctx_data['config']
     
     # Extract issue keys from URLs if provided
     processed_keys = [extract_issue_key_from_url_or_key(key) for key in issue_keys]
     
     if config.dry_run:
         rprint("[yellow]Running in dry-run mode - no issues will be created[/yellow]")
+    
+    # Use enhanced service if any enhancements are requested
+    if ctx_data['use_enhanced']:
+        from migration_extensions import EnhancedMigrationService
+        service = EnhancedMigrationService(
+            config,
+            ctx_data['user_mapping_file'],
+            ctx_data['auto_create_labels'],
+            ctx_data['migrate_closed_as_closed']
+        )
+    else:
+        service = MigrationService(config)
     
     results = service.migrate_issues_by_keys(processed_keys)
     
@@ -87,11 +111,23 @@ def migrate(ctx, issue_keys: List[str]):
 @click.pass_context
 def migrate_jql(ctx, jql: str, max_results: int):
     """Migrate issues found by JQL query"""
-    config = ctx.obj
-    service = MigrationService(config)
+    ctx_data = ctx.obj
+    config = ctx_data['config']
     
     if config.dry_run:
         rprint("[yellow]Running in dry-run mode - no issues will be created[/yellow]")
+    
+    # Use enhanced service if any enhancements are requested
+    if ctx_data['use_enhanced']:
+        from migration_extensions import EnhancedMigrationService
+        service = EnhancedMigrationService(
+            config,
+            ctx_data['user_mapping_file'],
+            ctx_data['auto_create_labels'],
+            ctx_data['migrate_closed_as_closed']
+        )
+    else:
+        service = MigrationService(config)
     
     results = service.migrate_issues_by_jql(jql, max_results)
     
@@ -107,11 +143,23 @@ def migrate_jql(ctx, jql: str, max_results: int):
 @click.pass_context
 def migrate_project(ctx, project_key: str, status: Optional[str]):
     """Migrate all issues from a Jira project"""
-    config = ctx.obj
-    service = MigrationService(config)
+    ctx_data = ctx.obj
+    config = ctx_data['config']
     
     if config.dry_run:
         rprint("[yellow]Running in dry-run mode - no issues will be created[/yellow]")
+    
+    # Use enhanced service if any enhancements are requested
+    if ctx_data['use_enhanced']:
+        from migration_extensions import EnhancedMigrationService
+        service = EnhancedMigrationService(
+            config,
+            ctx_data['user_mapping_file'],
+            ctx_data['auto_create_labels'],
+            ctx_data['migrate_closed_as_closed']
+        )
+    else:
+        service = MigrationService(config)
     
     results = service.migrate_project_issues(project_key, status)
     
@@ -127,11 +175,23 @@ def migrate_project(ctx, project_key: str, status: Optional[str]):
 @click.pass_context
 def preview(ctx, issue_keys: List[str], full: bool):
     """Preview what would be migrated without creating issues"""
-    config = ctx.obj
-    service = MigrationService(config)
+    ctx_data = ctx.obj
+    config = ctx_data['config']
     
     # Extract issue keys from URLs if provided
     processed_keys = [extract_issue_key_from_url_or_key(key) for key in issue_keys]
+    
+    # Use enhanced service if any enhancements are requested
+    if ctx_data['use_enhanced']:
+        from migration_extensions import EnhancedMigrationService
+        service = EnhancedMigrationService(
+            config,
+            ctx_data['user_mapping_file'],
+            ctx_data['auto_create_labels'],
+            ctx_data['migrate_closed_as_closed']
+        )
+    else:
+        service = MigrationService(config)
     
     service.preview_migration(processed_keys, show_full=full)
 
@@ -140,7 +200,8 @@ def preview(ctx, issue_keys: List[str], full: bool):
 @click.pass_context
 def test_connection(ctx):
     """Test connection to Jira and GitHub"""
-    config = ctx.obj
+    ctx_data = ctx.obj
+    config = ctx_data['config']
     console = Console()
     
     # Test Jira connection
@@ -180,7 +241,8 @@ def test_connection(ctx):
 @click.pass_context
 def info(ctx):
     """Show configuration information"""
-    config = ctx.obj
+    ctx_data = ctx.obj
+    config = ctx_data['config']
     console = Console()
     
     from rich.table import Table
@@ -198,6 +260,56 @@ def info(ctx):
     table.add_row("Dry Run", "Yes" if config.dry_run else "No")
     
     console.print(table)
+
+
+# New user discovery commands
+@cli.command('generate-user-mapping')
+@click.argument('project_key')
+@click.option('--output-file', help='Output file path (default: user-mapping-{project}.json)')
+@click.pass_context
+def generate_user_mapping(ctx, project_key: str, output_file: str):
+    """Generate user mapping template file for a Jira project"""
+    ctx_data = ctx.obj
+    config = ctx_data['config']
+    
+    from user_discovery import UserDiscoveryService
+    discovery_service = UserDiscoveryService(config)
+    
+    result_file = discovery_service.generate_user_mapping_template(project_key, output_file)
+    
+    if not result_file:
+        sys.exit(1)
+
+
+@cli.command('validate-user-mapping')
+@click.argument('mapping_file')
+@click.pass_context
+def validate_user_mapping(ctx, mapping_file: str):
+    """Validate a user mapping file"""
+    ctx_data = ctx.obj
+    config = ctx_data['config']
+    
+    from user_discovery import UserDiscoveryService
+    discovery_service = UserDiscoveryService(config)
+    
+    is_valid = discovery_service.validate_mapping_file(mapping_file)
+    
+    if not is_valid:
+        sys.exit(1)
+
+
+@cli.command('show-mapping-stats')
+@click.argument('mapping_file')
+@click.pass_context
+def show_mapping_stats(ctx, mapping_file: str):
+    """Show statistics about a user mapping file"""
+    ctx_data = ctx.obj
+    config = ctx_data['config']
+    
+    from user_discovery import UserDiscoveryService
+    discovery_service = UserDiscoveryService(config)
+    
+    discovery_service.show_mapping_stats(mapping_file)
 
 
 if __name__ == '__main__':
