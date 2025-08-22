@@ -19,6 +19,7 @@ class JiraIssue:
     labels: List[str]
     components: List[str]
     custom_fields: Dict[str, Any]
+    issue_links: List[Dict[str, Any]]
     
     @classmethod
     def from_jira_data(cls, jira_data: Dict[str, Any]) -> 'JiraIssue':
@@ -38,7 +39,8 @@ class JiraIssue:
             updated=datetime.fromisoformat(fields['updated'].replace('Z', '+00:00')),
             labels=fields.get('labels', []),
             components=[comp['name'] for comp in fields.get('components', [])],
-            custom_fields={k: v for k, v in fields.items() if k.startswith('customfield_')}
+            custom_fields={k: v for k, v in fields.items() if k.startswith('customfield_')},
+            issue_links=fields.get('issuelinks', [])
         )
 
 

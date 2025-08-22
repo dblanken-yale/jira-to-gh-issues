@@ -189,6 +189,28 @@ class EnhancedIssueMapper(IssueMapper):
         if jira_issue.components:
             body_parts.append(f"- **Components:** {', '.join(jira_issue.components)}")
         
+        # Issue links
+        if jira_issue.issue_links:
+            body_parts.append(f"- **Linked Issues:**")
+            for link in jira_issue.issue_links:
+                link_type = link.get('type', {}).get('name', 'Related')
+                
+                # Determine direction and target issue
+                if 'outwardIssue' in link:
+                    direction = link.get('type', {}).get('outward', 'links to')
+                    target_issue = link['outwardIssue']
+                elif 'inwardIssue' in link:
+                    direction = link.get('type', {}).get('inward', 'links from')
+                    target_issue = link['inwardIssue']
+                else:
+                    continue
+                
+                target_key = target_issue.get('key', 'Unknown')
+                target_summary = target_issue.get('fields', {}).get('summary', 'No summary')
+                target_status = target_issue.get('fields', {}).get('status', {}).get('name', 'Unknown')
+                
+                body_parts.append(f"  - **{direction}** [{target_key}] {target_summary} ({target_status})")
+        
         body_parts.append("")
         
         # Enhanced comments with user mapping
