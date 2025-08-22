@@ -165,7 +165,7 @@ class EnhancedMigrationService:
                     labels_enhanced=len(enhanced_github_issue.labels) - len(jira_issue.labels),
                     original_status=jira_issue.status,
                     github_state=enhanced_github_issue.state,
-                    comments_enhanced=self.enhanced_mapper.get_user_mapping_stats().comments_enhanced,
+                    comments_enhanced=len([c for c in comments if c.get('author', {}).get('displayName') and self.user_mapping and self.user_mapping.jira_user_to_github_username(c.get('author', {}).get('displayName'))]) if self.user_mapping else 0,
                     users_mentioned=self.enhanced_mapper.get_user_mapping_stats().new_mentions_created
                 )
                 

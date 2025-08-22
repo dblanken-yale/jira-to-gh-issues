@@ -7,6 +7,12 @@
 # Example: ./range_migrate.sh PROJ 1 500 50 15
 #   This migrates PROJ-1 through PROJ-500 in batches of 50, waiting 15 minutes between batches
 
+# Check bash version compatibility
+if [[ ${BASH_VERSION%%.*} -lt 3 ]]; then
+    echo "Error: This script requires Bash 3.0 or higher. Current version: $BASH_VERSION"
+    exit 1
+fi
+
 set -e
 
 # Configuration
@@ -37,7 +43,7 @@ if [[ -z "$PROJECT" || -z "$START_NUM" || -z "$END_NUM" ]]; then
 fi
 
 # Check for user mapping file
-MAPPING_FILE="user-mapping-${PROJECT,,}.json"
+MAPPING_FILE="user-mapping-$(echo "$PROJECT" | tr '[:upper:]' '[:lower:]').json"
 if [[ -f "$MAPPING_FILE" ]]; then
     FLAGS="--user-mapping-file=$MAPPING_FILE --auto-create-labels --migrate-closed-as-closed"
     echo -e "${GREEN}✅ Using user mapping file: $MAPPING_FILE${NC}"

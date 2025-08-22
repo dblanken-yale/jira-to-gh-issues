@@ -46,6 +46,16 @@ class JiraClient:
             print(f"Error searching Jira issues: {e}")
             return []
     
+    def get_issue_count(self, jql: str) -> int:
+        """Get the total count of issues matching a JQL query without fetching all data"""
+        try:
+            # Request just 1 issue to get the total count from the response
+            search_results = self.jira.jql(jql, limit=1)
+            return search_results.get('total', 0)
+        except Exception as e:
+            print(f"Error counting Jira issues: {e}")
+            return 0
+    
     def get_project_issues(self, project_key: str, status: Optional[str] = None) -> List[JiraIssue]:
         """Get all issues from a specific project"""
         jql = f"project = {project_key}"

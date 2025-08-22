@@ -162,7 +162,15 @@ class EnhancedIssueMapper(IssueMapper):
         body_parts.append(f"- **Issue Type:** {jira_issue.issue_type}")
         body_parts.append(f"- **Priority:** {jira_issue.priority}")
         body_parts.append(f"- **Status:** {jira_issue.status}")
-        body_parts.append(f"- **Reporter:** {jira_issue.reporter}")
+        # Enhanced reporter with GitHub mapping
+        if self.user_mapping and self.user_mapping.is_mapping_loaded():
+            github_mention = self.user_mapping.jira_user_to_github_mention(jira_issue.reporter)
+            if github_mention and github_mention != jira_issue.reporter:
+                body_parts.append(f"- **Reporter:** {jira_issue.reporter} ({github_mention})")
+            else:
+                body_parts.append(f"- **Reporter:** {jira_issue.reporter}")
+        else:
+            body_parts.append(f"- **Reporter:** {jira_issue.reporter}")
         
         if jira_issue.assignee:
             # Enhanced assignee with GitHub mapping

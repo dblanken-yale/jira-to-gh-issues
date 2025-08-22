@@ -7,13 +7,20 @@
 # Usage: ./batch_migrate.sh PROJ [batch_size] [delay_minutes]
 # Example: ./batch_migrate.sh MYPROJECT 50 10
 
+# Check bash version compatibility
+if [[ ${BASH_VERSION%%.*} -lt 3 ]]; then
+    echo "Error: This script requires Bash 3.0 or higher. Current version: $BASH_VERSION"
+    exit 1
+fi
+
 set -e  # Exit on any error
 
 # Configuration
 PROJECT="${1:-PROJ}"
 BATCH_SIZE="${2:-50}"
 DELAY_MINUTES="${3:-10}"
-MAPPING_FILE="user-mapping-${PROJECT,,}.json"  # Convert to lowercase
+TOTAL_COUNT_OVERRIDE="${4:-}"  # Optional: manually specify total count
+MAPPING_FILE="user-mapping-$(echo "$PROJECT" | tr '[:upper:]' '[:lower:]').json"  # Convert to lowercase
 
 # Colors for output
 RED='\033[0;31m'
@@ -62,11 +69,13 @@ check_prerequisites() {
         log_success "User mapping file found: $MAPPING_FILE"
         
         # Validate mapping file
-        ./run.sh validate-user-mapping "$MAPPING_FILE" >/dev/null 2>&1
+        local validation_output=$(./run.sh validate-user-mapping "$MAPPING_FILE" 2>&1)
         if [[ $? -eq 0 ]]; then
             log_success "User mapping file is valid"
         else
-            log_warning "User mapping file has issues. Migration will continue but user mapping may not work properly."
+            log_warning "User mapping file has issues: $(echo "$validation_output" | head -1)"
+            log_warning "Migration will continue without user mapping"
+            FLAGS="--auto-create-labels --migrate-closed-as-closed"  # Remove user mapping flag
         fi
     else
         log_warning "No user mapping file found at $MAPPING_FILE"
@@ -76,21 +85,38 @@ check_prerequisites() {
     
     # Test connection
     log_step "Testing connections..."
-    if ./run.sh test-connection >/dev/null 2>&1; then
+    local connection_output=$(./run.sh test-connection 2>&1)
+    if [[ $? -eq 0 ]]; then
         log_success "Jira and GitHub connections are working"
     else
-        log_error "Connection test failed. Check your .env configuration."
+        log_error "Connection test failed:"
+        echo "$connection_output"
+        log_error "Check your .env configuration."
         exit 1
     fi
 }
 
 get_issue_count() {
     local jql="$1"
-    log_step "Counting issues for: $jql"
+    
+    # If user provided a total count override, use it
+    if [[ -n "$TOTAL_COUNT_OVERRIDE" ]]; then
+        log_info "Using manual count override: $TOTAL_COUNT_OVERRIDE" >&2
+        echo "$TOTAL_COUNT_OVERRIDE"
+        return
+    fi
+    
+    log_step "Counting issues for: $jql" >&2
     
     # Use dry-run to count issues without creating them
-    local output=$(./run.sh --dry-run migrate-jql "$jql" --max-results 1000 2>/dev/null)
+    local output=$(./run.sh --dry-run migrate-jql "$jql" --max-results 1 2>&1)
     local count=$(echo "$output" | grep -o "Found [0-9]* issues" | grep -o "[0-9]*" | head -1)
+    
+    # Check for unbounded query error
+    if echo "$output" | grep -q "Unbounded JQL queries are not allowed"; then
+        log_warning "Cannot count issues due to JQL restrictions. Using estimate." >&2
+        count="1000"  # Use conservative estimate
+    fi
     
     if [[ -z "$count" ]]; then
         count=0
@@ -149,8 +175,9 @@ main() {
     
     # Validate arguments
     if [[ -z "$PROJECT" ]]; then
-        log_error "Usage: $0 PROJECT [batch_size] [delay_minutes]"
+        log_error "Usage: $0 PROJECT [batch_size] [delay_minutes] [total_count]"
         log_error "Example: $0 MYPROJECT 50 10"
+        log_error "Example with manual count: $0 MYPROJECT 50 10 500"
         exit 1
     fi
     

@@ -16,7 +16,11 @@ class GitHubClient:
         """Create a GitHub issue"""
         try:
             if self.config.dry_run:
-                print(f"[DRY RUN] Would create issue: {github_issue.title}")
+                # For enhanced issues, also show state in dry run
+                state_info = ""
+                if hasattr(github_issue, 'state') and github_issue.state == "closed":
+                    state_info = " (would be closed)"
+                print(f"[DRY RUN] Would create issue: {github_issue.title}{state_info}")
                 return MigrationResult(
                     jira_key="DRY_RUN",
                     success=True,
@@ -25,7 +29,16 @@ class GitHubClient:
                 )
             
             issue_data = github_issue.to_github_data()
+            
+            # Extract state if present (GitHub API doesn't accept state during creation)
+            target_state = issue_data.pop('state', None)
+            
+            # Create the issue (always created as "open")
             created_issue = self.repo.create_issue(**issue_data)
+            
+            # If issue should be closed, close it after creation
+            if target_state == "closed":
+                created_issue.edit(state="closed")
             
             return MigrationResult(
                 jira_key="",  # Will be set by the caller
