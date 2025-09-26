@@ -1,5 +1,6 @@
 # Configuration file
 .env
+.env.*
 
 # Python cache
 __pycache__/
@@ -34,3 +35,6 @@ htmlcov/
 # Temporary files
 *.tmp
 *.temp
+
+# Mapping files
+user-mapping*.json
