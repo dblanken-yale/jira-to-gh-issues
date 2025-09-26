@@ -161,6 +161,10 @@ Run migrations with powerful enhancements:
 # Migrate by JQL query
 ./run --auto-create-labels migrate-jql "project = PROJ AND status = 'To Do'"
 
+# Migrate by JQL query with pagination (for large result sets)
+./run --auto-create-labels migrate-jql "project = PROJ ORDER BY key ASC" --max-results 50 --start-at 0
+./run --auto-create-labels migrate-jql "project = PROJ ORDER BY key ASC" --max-results 50 --start-at 50
+
 # Migrate entire project
 ./run --user-mapping-file=users.json --migrate-closed-as-closed migrate-project PROJ
 
@@ -253,6 +257,8 @@ python main.py test-connection
 | `--user-mapping-file=FILE` | Path to user mapping JSON | • Proper assignee migration<br>• @mentions in comments |
 | `--auto-create-labels` | Auto-create enhanced labels | • Type, priority, status labels<br>• Automatic GitHub label creation |
 | `--migrate-closed-as-closed` | Migrate resolved issues as closed | • Preserves issue lifecycle state |
+| `--max-results=N` | Number of issues per batch | • Control batch size (default: 50) |
+| `--start-at=N` | Starting offset for pagination | • Resume from specific point<br>• Manual pagination control |
 | `--dry-run` | Preview without creating issues | • Safe testing before migration |
 | `--no-comments` | Skip comment migration | • Faster migration, metadata only |
 | `--no-attachments` | Skip attachment processing | • Faster migration |
@@ -417,9 +423,9 @@ chmod +x range_migrate.sh
 # ... with 15-minute delays between batches
 ```
 
-### Smart Batch Migration
+### Smart Batch Migration ✨ FIXED!
 
-Intelligent batching with multiple strategies:
+Intelligent batching with **proper pagination** - now migrates ALL issues instead of repeating the same ones:
 
 ```bash
 # Copy script to project root
@@ -430,27 +436,38 @@ chmod +x batch_migrate.sh
 ./batch_migrate.sh PROJ 50 10
 
 # Choose from strategies:
-# 1. Migrate all issues
+# 1. Migrate all issues (✅ now paginated correctly)
 # 2. Migrate by status (closed first, then open)
 # 3. Migrate by priority (high to low)
 # 4. Migrate by date range
 # 5. Custom JQL query
+
+# Each batch now processes unique issues:
+# Batch 1: Issues 1-50 (start_at=0)
+# Batch 2: Issues 51-100 (start_at=50)
+# Batch 3: Issues 101-150 (start_at=100)
 ```
 
 ### Manual Batch Commands
 
-For more control, use manual batch commands:
+For more control, use manual batch commands with proper pagination:
 
 ```bash
-# Method 1: Sequential ranges
+# Method 1: Sequential ranges (still useful for known ranges)
 for i in {1..50}; do echo "PROJ-$i"; done | xargs ./run.sh --user-mapping-file=users.json --auto-create-labels migrate
 for i in {51..100}; do echo "PROJ-$i"; done | xargs ./run.sh --user-mapping-file=users.json --auto-create-labels migrate
 
-# Method 2: JQL-based batching (recommended)
-./run.sh --user-mapping-file=users.json --auto-create-labels migrate-jql "project = PROJ AND created >= '2023-01-01' AND created <= '2023-03-31'" --max-results 50
+# Method 2: JQL-based batching with pagination (✅ RECOMMENDED)
+./run.sh --user-mapping-file=users.json --auto-create-labels migrate-jql "project = PROJ ORDER BY key ASC" --max-results 50 --start-at 0
+./run.sh --user-mapping-file=users.json --auto-create-labels migrate-jql "project = PROJ ORDER BY key ASC" --max-results 50 --start-at 50
+./run.sh --user-mapping-file=users.json --auto-create-labels migrate-jql "project = PROJ ORDER BY key ASC" --max-results 50 --start-at 100
 
-# Method 3: Status-based batching
-./run.sh --user-mapping-file=users.json --migrate-closed-as-closed migrate-jql "project = PROJ AND status in (Done, Closed)" --max-results 100
+# Method 3: Status-based batching with pagination
+./run.sh --user-mapping-file=users.json --migrate-closed-as-closed migrate-jql "project = PROJ AND status in (Done, Closed) ORDER BY key ASC" --max-results 50 --start-at 0
+./run.sh --user-mapping-file=users.json --migrate-closed-as-closed migrate-jql "project = PROJ AND status in (Done, Closed) ORDER BY key ASC" --max-results 50 --start-at 50
+
+# Method 4: Date-based batching
+./run.sh --user-mapping-file=users.json --auto-create-labels migrate-jql "project = PROJ AND created >= '2023-01-01' AND created <= '2023-03-31' ORDER BY key ASC" --max-results 50 --start-at 0
 ```
 
 **Batch Size Recommendations:**
@@ -459,3 +476,65 @@ for i in {51..100}; do echo "PROJ-$i"; done | xargs ./run.sh --user-mapping-file
 - **10-15 minute delays**: Between large batches to respect rate limits
 
 See [`examples/enhanced_migration_workflow.md`](examples/enhanced_migration_workflow.md) for complete batch migration documentation.
+
+## 🚨 Error Handling & Failed Issues
+
+### Automatic Error Handling
+
+The migration tool now includes robust error handling for common issues:
+
+- **Rate Limits**: Automatic retry with exponential backoff (30s, 60s, 120s, 240s, 480s)
+- **GitHub API Errors**: Smart retry logic for temporary failures
+- **Permission Issues**: Clear error messages for authentication problems
+- **Network Errors**: Automatic retry for connection issues
+
+### Failed Issues Logging
+
+Track and retry failed migrations with detailed error logs:
+
+```bash
+# Enable failed issues logging
+./run.sh --failed-issues-file=failed.json migrate PROJ-123 PROJ-124
+
+# Batch migrations automatically create timestamped logs
+./examples/batch_migrate.sh PROJ 50 10
+# Creates: failed-issues-20231225-143022.json
+```
+
+### Failed Issues File Format
+
+```json
+{
+  "timestamp": "2023-12-25T14:30:22.123456",
+  "total_failed": 3,
+  "failed_issues": [
+    {
+      "jira_key": "PROJ-123",
+      "error_message": "403 Forbidden: Rate limit exceeded",
+      "timestamp": "2023-12-25T14:30:22.456789"
+    }
+  ]
+}
+```
+
+### Retrying Failed Issues
+
+```bash
+# Extract failed issue keys from JSON log
+jq -r '.failed_issues[].jira_key' failed.json
+
+# Retry specific failed issues
+./run.sh --user-mapping-file=users.json migrate PROJ-123 PROJ-456
+
+# Retry with different settings (e.g., no comments for faster processing)
+./run.sh --no-comments migrate PROJ-123 PROJ-456
+```
+
+### Common Issues & Solutions
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `403 Forbidden` | Rate limits or bad token | Automatic exponential backoff: 30s→60s→120s→240s→480s |
+| `422 Unprocessable Entity` | Invalid issue data | Check issue title/body content, review logs |
+| `404 Not Found` | Repository access | Verify repo name and token permissions |
+| `Max retries exceeded` | Persistent API issues | Check GitHub status, try smaller batches |

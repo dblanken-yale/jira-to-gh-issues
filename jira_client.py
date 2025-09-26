@@ -34,24 +34,79 @@ class JiraClient:
                 issues.append(issue)
         return issues
     
-    def search_issues(self, jql: str, max_results: int = 50) -> List[JiraIssue]:
-        """Search for issues using JQL"""
+    def search_issues(self, jql: str, max_results: int = 50, start_at: int = 0) -> List[JiraIssue]:
+        """Search for issues using JQL with pagination support"""
         try:
-            search_results = self.jira.jql(jql, limit=max_results)
+            # Try using the existing jql method but with different parameter names
+            # Some versions use 'startAt' instead of 'start'
+            if start_at > 0:
+                # Try the REST API directly using the existing session
+                search_results = self.jira.get(
+                    'rest/api/2/search',
+                    params={
+                        'jql': jql,
+                        'maxResults': max_results,
+                        'startAt': start_at,
+                        'fields': '*all'
+                    }
+                )
+            else:
+                # For start_at=0, use the standard method
+                search_results = self.jira.jql(jql, limit=max_results)
+
             issues = []
             for issue_data in search_results['issues']:
                 issues.append(JiraIssue.from_jira_data(issue_data))
             return issues
         except Exception as e:
-            print(f"Error searching Jira issues: {e}")
-            return []
+            print(f"Error searching Jira issues with pagination: {e}")
+            # Fall back to original method without pagination
+            try:
+                search_results = self.jira.jql(jql, limit=max_results)
+                issues = []
+                for issue_data in search_results['issues']:
+                    issues.append(JiraIssue.from_jira_data(issue_data))
+                return issues
+            except Exception as e2:
+                print(f"Fallback also failed: {e2}")
+                return []
     
     def get_issue_count(self, jql: str) -> int:
         """Get the total count of issues matching a JQL query without fetching all data"""
         try:
-            # Request just 1 issue to get the total count from the response
-            search_results = self.jira.jql(jql, limit=1)
-            return search_results.get('total', 0)
+            # Try with a large batch to get as accurate count as possible
+            search_results = self.jira.jql(jql, limit=5000)  # Maximum allowed
+
+            # Check if 'total' field exists (older API format)
+            if 'total' in search_results:
+                return search_results['total']
+
+            # For newer API without total field, count issues in response
+            issue_count = len(search_results.get('issues', []))
+
+            # If it's the last page, we have the exact count
+            if search_results.get('isLast', True):
+                return issue_count
+
+            # If there are more pages, we need to continue paginating
+            # Count all issues by making multiple requests
+            total_count = issue_count
+            next_token = search_results.get('nextPageToken')
+
+            while next_token and not search_results.get('isLast', True):
+                try:
+                    search_results = self.jira.jql(jql, limit=5000, start=total_count)
+                    batch_count = len(search_results.get('issues', []))
+                    total_count += batch_count
+                    next_token = search_results.get('nextPageToken')
+
+                    if batch_count == 0:  # Safety break
+                        break
+                except:
+                    break
+
+            return total_count
+
         except Exception as e:
             print(f"Error counting Jira issues: {e}")
             return 0

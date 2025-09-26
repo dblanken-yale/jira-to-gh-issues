@@ -46,9 +46,11 @@ def extract_issue_key_from_url_or_key(input_string: str) -> str:
 @click.option('--user-mapping-file', help='Path to user mapping JSON file for enhanced migration')
 @click.option('--auto-create-labels', is_flag=True, help='Automatically create missing labels for types, priorities, etc.')
 @click.option('--migrate-closed-as-closed', is_flag=True, help='Migrate resolved Jira issues as closed GitHub issues')
+@click.option('--failed-issues-file', help='Output file for failed issue details (JSON format)')
 @click.pass_context
-def cli(ctx, dry_run: bool, no_comments: bool, no_attachments: bool, 
-        user_mapping_file: str, auto_create_labels: bool, migrate_closed_as_closed: bool):
+def cli(ctx, dry_run: bool, no_comments: bool, no_attachments: bool,
+        user_mapping_file: str, auto_create_labels: bool, migrate_closed_as_closed: bool,
+        failed_issues_file: str):
     """Jira to GitHub Issues Migration Tool"""
     try:
         config = Config.from_env()
@@ -62,6 +64,7 @@ def cli(ctx, dry_run: bool, no_comments: bool, no_attachments: bool,
             'user_mapping_file': user_mapping_file,
             'auto_create_labels': auto_create_labels,
             'migrate_closed_as_closed': migrate_closed_as_closed,
+            'failed_issues_file': failed_issues_file,
             'use_enhanced': bool(user_mapping_file or auto_create_labels or migrate_closed_as_closed)
         }
     except ValueError as e:
@@ -95,7 +98,7 @@ def migrate(ctx, issue_keys: List[str]):
             ctx_data['migrate_closed_as_closed']
         )
     else:
-        service = MigrationService(config)
+        service = MigrationService(config, ctx_data['failed_issues_file'])
     
     results = service.migrate_issues_by_keys(processed_keys)
     
@@ -108,8 +111,9 @@ def migrate(ctx, issue_keys: List[str]):
 @cli.command()
 @click.argument('jql')
 @click.option('--max-results', default=50, help='Maximum number of issues to migrate')
+@click.option('--start-at', default=0, help='Starting offset for pagination (0-based)')
 @click.pass_context
-def migrate_jql(ctx, jql: str, max_results: int):
+def migrate_jql(ctx, jql: str, max_results: int, start_at: int):
     """Migrate issues found by JQL query"""
     ctx_data = ctx.obj
     config = ctx_data['config']
@@ -127,9 +131,9 @@ def migrate_jql(ctx, jql: str, max_results: int):
             ctx_data['migrate_closed_as_closed']
         )
     else:
-        service = MigrationService(config)
+        service = MigrationService(config, ctx_data['failed_issues_file'])
     
-    results = service.migrate_issues_by_jql(jql, max_results)
+    results = service.migrate_issues_by_jql(jql, max_results, start_at)
     
     # Exit with error code if any migrations failed
     failed_count = sum(1 for r in results if not r.success)
@@ -159,7 +163,7 @@ def migrate_project(ctx, project_key: str, status: Optional[str]):
             ctx_data['migrate_closed_as_closed']
         )
     else:
-        service = MigrationService(config)
+        service = MigrationService(config, ctx_data['failed_issues_file'])
     
     results = service.migrate_project_issues(project_key, status)
     
@@ -191,7 +195,7 @@ def preview(ctx, issue_keys: List[str], full: bool):
             ctx_data['migrate_closed_as_closed']
         )
     else:
-        service = MigrationService(config)
+        service = MigrationService(config, ctx_data['failed_issues_file'])
     
     service.preview_migration(processed_keys, show_full=full)
 
@@ -305,11 +309,57 @@ def show_mapping_stats(ctx, mapping_file: str):
     """Show statistics about a user mapping file"""
     ctx_data = ctx.obj
     config = ctx_data['config']
-    
+
     from user_discovery import UserDiscoveryService
     discovery_service = UserDiscoveryService(config)
-    
+
     discovery_service.show_mapping_stats(mapping_file)
+
+
+@cli.command('count-issues')
+@click.argument('jql')
+@click.option('--estimate-from-max', is_flag=True, help='Estimate count from highest issue number')
+@click.pass_context
+def count_issues(ctx, jql: str, estimate_from_max: bool):
+    """Count total issues matching a JQL query"""
+    ctx_data = ctx.obj
+    config = ctx_data['config']
+
+    from jira_client import JiraClient
+    jira_client = JiraClient(config)
+
+    try:
+        if estimate_from_max:
+            # Get the highest issue number by sorting descending and taking first result
+            # Remove any existing ORDER BY clause and add our own
+            import re
+            base_jql = re.sub(r'\s+ORDER\s+BY\s+.*$', '', jql, flags=re.IGNORECASE).strip()
+            max_jql = base_jql + " ORDER BY key DESC"
+            issues = jira_client.search_issues(max_jql, max_results=1)
+            if issues:
+                highest_key = issues[0].key
+                # Extract number from key (e.g., "YSP-1170" -> 1170)
+                import re
+                match = re.search(r'-(\d+)$', highest_key)
+                if match:
+                    max_number = int(match.group(1))
+                    rprint(f"[green]Estimated {max_number} issues (based on highest key: {highest_key})[/green]")
+                    rprint(f"[yellow]Note: This is an estimate based on the highest issue number[/yellow]")
+                    rprint(f"[blue]JQL: {jql}[/blue]")
+                    return
+                else:
+                    rprint(f"[yellow]Could not extract number from key: {highest_key}[/yellow]")
+            else:
+                rprint(f"[red]No issues found for estimation[/red]")
+                sys.exit(1)
+
+        # Fall back to regular counting
+        count = jira_client.get_issue_count(jql)
+        rprint(f"[green]Found {count} issues matching query[/green]")
+        rprint(f"[blue]JQL: {jql}[/blue]")
+    except Exception as e:
+        rprint(f"[red]Error counting issues: {e}[/red]")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

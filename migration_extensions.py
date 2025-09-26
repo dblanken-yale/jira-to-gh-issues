@@ -65,14 +65,16 @@ class EnhancedMigrationService:
         
         return self._migrate_issues_enhanced(jira_issues)
     
-    def migrate_issues_by_jql(self, jql: str, max_results: int = 50) -> List[EnhancedMigrationResult]:
+    def migrate_issues_by_jql(self, jql: str, max_results: int = 50, start_at: int = 0) -> List[EnhancedMigrationResult]:
         """Migrate Jira issues found by JQL query with enhancements"""
         rprint(f"[bold blue]🔍 Searching for issues with JQL: {jql}[/bold blue]")
-        
+        if start_at > 0:
+            rprint(f"[blue]Starting at offset: {start_at}[/blue]")
+
         self._show_enhancement_config()
-        
+
         # Search for issues using original service's jira client
-        jira_issues = self.original_service.jira_client.search_issues(jql, max_results)
+        jira_issues = self.original_service.jira_client.search_issues(jql, max_results, start_at)
         
         if not jira_issues:
             rprint("[bold red]No issues found matching the JQL query![/bold red]")

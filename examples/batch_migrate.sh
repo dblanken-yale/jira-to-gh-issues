@@ -31,8 +31,11 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Failed issues log file
+FAILED_ISSUES_FILE="failed-issues-$(date +%Y%m%d-%H%M%S).json"
+
 # Enhanced migration flags
-FLAGS="--user-mapping-file=$MAPPING_FILE --auto-create-labels --migrate-closed-as-closed"
+FLAGS="--user-mapping-file=$MAPPING_FILE --auto-create-labels --migrate-closed-as-closed --failed-issues-file=$FAILED_ISSUES_FILE"
 
 # Functions
 log_info() {
@@ -98,30 +101,58 @@ check_prerequisites() {
 
 get_issue_count() {
     local jql="$1"
-    
+
     # If user provided a total count override, use it
     if [[ -n "$TOTAL_COUNT_OVERRIDE" ]]; then
         log_info "Using manual count override: $TOTAL_COUNT_OVERRIDE" >&2
         echo "$TOTAL_COUNT_OVERRIDE"
         return
     fi
-    
+
     log_step "Counting issues for: $jql" >&2
-    
-    # Use dry-run to count issues without creating them
-    local output=$(./run.sh --dry-run migrate-jql "$jql" --max-results 1 2>&1)
-    local count=$(echo "$output" | grep -o "Found [0-9]* issues" | grep -o "[0-9]*" | head -1)
-    
+
+    # Try smart estimation first (get highest issue number)
+    local output=$(./run.sh count-issues "$jql" --estimate-from-max 2>&1)
+    local count=$(echo "$output" | grep -o "Estimated [0-9]* issues" | grep -o "[0-9]*" | head -1)
+
+    # If estimation failed, fall back to regular counting
+    if [[ -z "$count" ]]; then
+        output=$(./run.sh count-issues "$jql" 2>&1)
+        count=$(echo "$output" | grep -o "Found [0-9]* issues" | grep -o "[0-9]*" | head -1)
+    fi
+
     # Check for unbounded query error
     if echo "$output" | grep -q "Unbounded JQL queries are not allowed"; then
         log_warning "Cannot count issues due to JQL restrictions. Using estimate." >&2
         count="1000"  # Use conservative estimate
     fi
-    
+
+    # Handle Jira API's 100-issue limit for counting
+    if [[ -n "$count" && "$count" -eq 100 ]]; then
+        log_warning "Found exactly 100 issues - this is likely the Jira API limit, not the actual count." >&2
+        log_info "Jira API can only return max 100 issues per request for counting." >&2
+        log_info "For projects with >100 issues, use manual count override:" >&2
+        log_info "  $0 $PROJECT $BATCH_SIZE $DELAY_MINUTES [TOTAL_COUNT]" >&2
+        log_info "  Example: $0 $PROJECT $BATCH_SIZE $DELAY_MINUTES 1170" >&2
+        echo ""
+        read -p "Enter the actual issue count for $PROJECT (or press Enter to continue with 100): " manual_count
+        if [[ -n "$manual_count" && "$manual_count" =~ ^[0-9]+$ ]]; then
+            count="$manual_count"
+            log_info "Using manual count: $count" >&2
+        else
+            log_warning "Continuing with count of 100 - migration may be incomplete." >&2
+        fi
+    elif [[ -n "$count" && "$count" -lt "$BATCH_SIZE" && "$count" -gt 0 ]]; then
+        log_warning "Found only $count issues. This might be incomplete due to API limitations." >&2
+        log_info "For large projects, consider using manual count:" >&2
+        log_info "  $0 $PROJECT $BATCH_SIZE $DELAY_MINUTES [TOTAL_COUNT]" >&2
+        log_info "  Example: $0 $PROJECT $BATCH_SIZE $DELAY_MINUTES 1170" >&2
+    fi
+
     if [[ -z "$count" ]]; then
         count=0
     fi
-    
+
     echo "$count"
 }
 
@@ -129,14 +160,18 @@ migrate_batch() {
     local jql="$1"
     local batch_num="$2"
     local max_results="$3"
-    
+
+    # Calculate the starting offset for this batch (0-based indexing)
+    local start_at=$(((batch_num - 1) * max_results))
+
     log_step "Executing batch $batch_num: $jql"
     log_info "Max results: $max_results"
+    log_info "Starting at offset: $start_at"
     log_info "$(date)"
-    
-    # Run the actual migration
-    ./run.sh $FLAGS migrate-jql "$jql" --max-results "$max_results"
-    
+
+    # Run the actual migration with pagination
+    ./run.sh $FLAGS migrate-jql "$jql" --max-results "$max_results" --start-at "$start_at"
+
     return $?
 }
 
@@ -162,6 +197,7 @@ show_config() {
     echo "Batch Size: $BATCH_SIZE issues"
     echo "Delay: $DELAY_MINUTES minutes"
     echo "Mapping File: $MAPPING_FILE"
+    echo "Failed Issues Log: $FAILED_ISSUES_FILE"
     echo "Flags: $FLAGS"
     echo ""
 }
@@ -331,7 +367,16 @@ main() {
     log_success "🎉 Batch migration completed!"
     log_info "📊 Check GitHub repository for migrated issues"
     log_info "🔍 Run './run.sh info' for configuration summary"
-    
+
+    # Check if failed issues file exists and has content
+    if [[ -f "$FAILED_ISSUES_FILE" ]]; then
+        failed_count=$(jq '.total_failed' "$FAILED_ISSUES_FILE" 2>/dev/null || echo "0")
+        if [[ "$failed_count" -gt 0 ]]; then
+            log_warning "📄 $failed_count failed issues logged to: $FAILED_ISSUES_FILE"
+            log_info "Review failed issues and retry with: ./run.sh migrate [ISSUE_KEYS]"
+        fi
+    fi
+
     # Show final rate limit status
     check_rate_limit
 }
